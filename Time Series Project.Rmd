@@ -1,0 +1,289 @@
+---
+title: "Le MASI au temps du COVID-19"
+output:
+  word_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Importation des bibliothèques
+```{r}
+library(lmtest)
+library(tidyverse)
+library(forecast)
+library(tseries)
+library(timeSeries)
+library(ggplot2)
+library(fitdistrplus)
+library(moments)
+library(TTR)
+```
+## Préparation des données
+```{r}
+MASI=read.csv2("/Users/pc/Downloads/MASI_Index.csv")
+view(MASI)
+```
+```{r}
+MASI$Ouverture=gsub(" ", "", MASI$Ouverture);MASI$Ouverture=
+gsub(",", ".", MASI$Ouverture);
+MASI$Ouverture= as.numeric(MASI$Ouverture)
+MASI$Plus.haut=gsub(" ", "", MASI$Plus.haut);MASI$Plus.haut=
+gsub(",", ".", MASI$Plus.haut);
+MASI$Plus.haut=as.numeric(MASI$Plus.haut)
+MASI$Plus.bas=gsub(" ", "", MASI$Plus.bas);MASI$Plus.bas=
+gsub(",", ".", MASI$Plus.bas);
+MASI$Plus.bas=as.numeric(MASI$Plus.bas)
+MASI$Prix=gsub(" ", "", MASI$Prix);MASI$Prix=gsub(",", ".",
+MASI$Prix);
+MASI$Prix=as.numeric(MASI$Prix)
+MASI$Date=as.Date(MASI$Date,"%d/%m/%y")
+view(MASI)
+```
+
+##Plots
+### Graphe d'ouverture
+```{r}
+ggplot(MASI) +
+aes(x = Date, y = Ouverture, colour = Ouverture) + geom_line(size = 1) +
+theme_minimal()
+```
+Les cotations à la Bourse ont lieu à peu près 5 jours par semaine et approximativement 52 semaines dans l’année, soit 260 jours.
+On travaillera avec le package tseries relatif aux séries chronologiques avec une fréquence de 1/260.
+### Log rendement
+```{r}
+log_rend = with(MASI, diff(log(MASI$Ouverture)))
+MASI = cbind(MASI, c(NA,log_rend));colnames(MASI)[12]="logrend"
+view(MASI)
+```
+```{r}
+ggplot(MASI) +
+aes(x = Date, y = logrend) +
+geom_line(size = 0.7, colour = "#a50f15") + theme_minimal()
+```
+
+Dans tout ce qui suit, on divisera nos données en deux périodes avant/après.
+
+## Transformation en format timeseries
+```{r}
+y=ts(MASI$Ouverture,start=c(2019,120),frequency=260);
+ts.plot(y) 
+x=diff(log(y),lag=1);
+
+y_avant=window(y,end=c(2021,60));
+fitlognormal=fitdistr(y_avant,"lognormal")$estimate
+```
+
+```{r}
+hist(y_avant,prob=TRUE);curve(dlnorm(x,fitlognormal[1], fitlognormal[2]),add=TRUE,col="red")
+ks.test(y_avant,plnorm,fitlognormal[1],fitlognormal[2])
+avant=window(x,end=c(2020,60));
+apres=window(x,start=c(2020,61))
+```
+
+## Statistiques Descriptives
+### Coefficients d'asymétrie et d'aplatissement 
+```{r}
+skewness(avant,na.rm=TRUE);
+skewness(apres,na.rm=TRUE);
+kurtosis(avant);
+kurtosis(apres)
+```
+#### Avant 
+Coeff d'asymétrie : sa valeur n'est pas élevée alors on peut dire que la distribution est assez symétrique. 
+Coeff d'aplatissement : On a une valeur supérieure à 0, un coefficient d’aplatissement positif indique une distribution avec un pic moins plat et des extrémités plus épaisses par rapport à la distribution normale (distribution leptokurtique). 
+#### Après
+Coeff d'asymétrie : sa valeur est inférieure à -1 alors on peut dire que la distribution est fortement asymétrique.
+Coeff d'aplatissement : On a une valeur supérieure à 0, un coefficient d’aplatissement positif indique une distribution avec un pic moins plat et des extrémités plus épaisses par rapport à la distribution normale (distribution leptokurtique). 
+#### Comparaison 
+Le coefficient d'asymétrie était faible mais positif avant la pandémie, alors qu'après il est devenu négative : ce qui veut dire que le MASI a un rendement nul voire même positive avant la pandémie et un rendement négatif en situation de la crise. 
+### Normalité 
+#### Histogramme Avant 
+```{r}
+hist(avant ,prob=TRUE);curve(dnorm(x,mean(avant),sd(avant)),add=TRUE ,col="red")
+```
+#### Histogramme Après
+```{r}
+hist(apres ,prob=TRUE);curve(dnorm(x,mean(apres),sd(apres)),add=TRUE,col="green")
+```
+La série apres est clairement non gaussienne.
+On effectuera le test de Kolmogrov Smirnov sur la série avant vu que d'après l'histogramme on remarque que la distribution est normale.
+#### Test de Kolmogrov Smirnov
+```{r}
+ks.test(avant,"pnorm",mean=mean(avant),sd=sd(avant))
+```
+On trouve p-value = 0.5071 : on accepte l'hypothèse nulle.
+
+### Stationnarité
+#### Test de Dickey-Fuller
+```{r}
+adf.test(avant, alternative = c("stationary", "explosive"))
+adf.test(diff(avant), alternative = c("stationary", "explosive"))
+```
+#### Test KPSS
+```{r}
+tseries::kpss.test(avant, null = "Level")
+tseries::kpss.test(diff(avant), null = "Level")
+```
+
+### ACF/PACF
+```{r}
+acf(avant);
+pacf(avant)
+```
+
+```{r}
+acf(diff(avant),lag=10);
+pacf(diff(avant))
+```
+
+### Propriétés des données sous l'angle de la finance 
+#### Normalité
+```{r}
+jarque.bera.test(avant)
+```
+Les données ne suivent pas une loi normale.
+#### Rendement nul en moyenne
+```{r}
+t.test(avant, mu=0)
+```
+Le rendement est significativement nul en moyenne.
+#### Volatilité observée
+```{r}
+varendav_sqrt_pidemi=abs(avant)*sqrt(pi/2)
+plot(varendav_sqrt_pidemi ,col="red")
+```
+Cet estimateur ne dépend que de la valeur du rendement, donc on ne peut pas se baser sur lui parcequ'il ne reflète pas la réalité.
+
+## Modélisation et prédiction
+### Lissage exponentiel
+#### Lissage simple
+```{r}
+lisexp1=HoltWinters(avant,beta=FALSE, gamma=FALSE)
+forecastlisexp1 <- predict(lisexp1 ,n.ahead=31,plot=TRUE)
+plot(lisexp1)
+```
+
+#### Lissage double
+```{r}
+lisexp2=HoltWinters(avant, gamma=FALSE)
+forecastlisexp2 <- predict(lisexp2 ,n.ahead=31,plot=TRUE)
+plot(lisexp2)
+```
+L'erreur quadratique :
+```{r}
+err1=sum((forecastlisexp1 -apres)^2);
+err2=sum((forecastlisexp2 -apres)^2)
+```
+
+### Prévision
+#### Lissage simple
+```{r}
+forecast:::plot.forecast(forecast:::forecast.HoltWinters(lisexp1 , h=31))
+```
+#### Lissage double
+```{r}
+forecast:::plot.forecast(forecast:::forecast.HoltWinters(lisexp2 , h=31))
+```
+### Vérification des hypothèses du modèle
+```{r}
+hist(residuals(forecast:::forecast.HoltWinters(lisexp1, h=31)),
+prob=TRUE)
+sd(residuals(forecast:::forecast.HoltWinters(lisexp1, h=31)),na.rm=TRUE)
+curve(dnorm(x,0,0.005016657),add=TRUE,col="green")
+```
+```{r}
+hist(residuals(forecast:::forecast.HoltWinters(lisexp2, h=31)),
+prob=TRUE)
+sd(residuals(forecast:::forecast.HoltWinters(lisexp2, h=31)),na.rm=TRUE)
+curve(dnorm(x,0,0.006607123),add=TRUE,col="blue")
+```
+
+### Lissage par moyenne mobile
+#### Représentation graphique
+n = 3
+```{r}
+moy3=SMA(avant ,n=3);
+tsmoy3=ts(moy3,start=c(2019,121),frequency = 260)
+ts.plot(avant)
+lines(tsmoy3 ,col="BLUE")
+```
+n = 21
+```{r}
+moy21=SMA(avant ,n=21)
+tsmoy21=ts(moy21,start=c(2019,121),frequency = 260) 
+ts.plot(avant)
+lines(tsmoy21 ,col="green")
+```
+Plus l'ordre du lissage est grand, plus le modèle de lissage se concentre sur les fluctuations en moyenne.
+
+#### Prévision
+n = 3
+```{r}
+forecast:::plot.forecast(forecast(tsmoy3 ,31))
+```
+n = 21
+```{r}
+forecast:::plot.forecast(forecast(tsmoy21 ,31))
+sum((forecast(tsmoy21,31)$mean-apres)^2)
+```
+
+### Modèle ARIMA
+#### Les paramètres du modèle
+```{r}
+aic_table <- function(data,P,Q){ 
+  table <- matrix(NA,(P+1),(Q+1))
+  for(p in 0:P) {
+    for(q in 0:Q) {
+       table[p+1,q+1] <- arima(data,order=c(p,0,q))$aic
+    }
+  }
+dimnames(table) <- list(paste(" AR",0:P, "", sep=""),paste(" MA",0:Q,sep=""))
+table
+}
+aic_table(avant,3,3)
+auto.arima(avant)
+fitarima = arima(avant, order = c(0,0,0), method = "ML")
+```
+#### Tester les résidus
+Autocorrélation :
+```{r}
+resarima = residuals(fitarima)
+acf(resarima)
+```
+Test de Ljung-Box :
+```{r}
+Box.test(resarima,type="Ljung",lag=4,fitdf=1)
+```
+Pas d'autocorrélation significative jusqu'à l'ordre 3.
+```{r}
+coeftest(fitarima)
+hist(resarima ,proba=TRUE)
+curve(dnorm(x,mean(resarima),sd(resarima)),add=TRUE,col="red")
+qqnorm(fitarima$residuals)
+qqline(fitarima$residuals)
+```
+D'après les graphes ci-dessus, on peut dire que la normalité des résidus est justifiée.
+Test de Kolmogrov-Smirnov:
+```{r}
+ks.test(resarima,"pnorm",mean=mean(resarima),sd=sd(resarima))
+```
+On accepte l'hypothèse nulle donc on a absence d'hétéroscédasticité conditionnelle.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
